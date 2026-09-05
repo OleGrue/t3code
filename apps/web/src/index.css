@@ -1780,6 +1780,24 @@ code {
   background: color-mix(in srgb, var(--contrast-border) 78%, transparent);
 }
 
+.chat-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.2rem;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--contrast-border) 78%, transparent) transparent;
+}
+
+.chat-markdown .katex-display::-webkit-scrollbar {
+  height: 7px;
+}
+
+.chat-markdown .katex-display::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--contrast-border) 78%, transparent);
+}
+
 .chat-markdown .chat-markdown-codeblock-header,
 .chat-markdown .chat-markdown-chrome-action {
   color: color-mix(in srgb, var(--contrast-foreground) 72%, transparent);

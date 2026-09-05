@@ -104,6 +104,9 @@ describe("ChatMarkdown math", () => {
 
     expect(html.match(/class="katex"/g)).toHaveLength(4);
     for (const math of ["x^2", "w_0", "y+1", "z-2"]) expect(html).toContain(math);
+    for (const source of ["$x^2$", "$$w_0$$", "\\(y+1\\)", "\\[z-2\\]"]) {
+      expect(html).toContain(`data-markdown-copy="${source}"`);
+    }
   });
 
   it("renders double-dollar and bracket math as display even mid-paragraph", () => {
@@ -144,6 +147,19 @@ describe("ChatMarkdown math", () => {
 
     expect(html).toContain(text);
     expect(html).not.toContain('class="katex"');
+  });
+
+  it("keeps Markdown inside price text and still renders a later equation", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={"Pay $5 [here](https://example.com); equation $x^2$"}
+      />,
+    );
+
+    expect(html).toContain('href="https://example.com"');
+    expect(html.match(/class="katex"/g)).toHaveLength(1);
+    expect(html).toContain('data-markdown-copy="$x^2$"');
   });
 
   it("leaves dollars and backslashes in code alone", () => {

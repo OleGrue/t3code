@@ -164,6 +164,11 @@ import {
   openUrlInPreview,
   BrowserPreviewUnavailableError,
 } from "../browser/openFileInPreview";
+import {
+  protectCurrencyDollars,
+  rehypeWrapMathCopySource,
+  remarkMathPresentation,
+} from "../markdown-math";
 
 interface ChatMarkdownProps {
   text: string;
@@ -364,12 +369,14 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     ...defaultSchema.attributes,
     "*": (defaultSchema.attributes?.["*"] ?? []).filter((attribute) => attribute !== "title"),
     code: [
-      // First match wins: keep the display marker `remarkMathDelimiters` sets for KaTeX.
+      // First match wins: keep the display marker the math presentation pass sets for KaTeX.
       ["className", /^language-./, "math-display"],
       ...(defaultSchema.attributes?.code ?? []),
       "dataCodeMeta",
       "dataInlineCode",
+      "dataMarkdownCopy",
     ],
+    pre: [...(defaultSchema.attributes?.pre ?? []), "dataMarkdownCopy"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
     a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
@@ -388,7 +395,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
   remarkNormalizeListItemIndentation,
   remarkCodexDirectives,
   remarkMath,
-  remarkMathDelimiters,
+  remarkMathPresentation,
   remarkPreserveCodeMeta,
   remarkNormalizeLinksAndTagInlineCode,
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
@@ -399,7 +406,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkNormalizeListItemIndentation,
   remarkCodexDirectives,
   remarkMath,
-  remarkMathDelimiters,
+  remarkMathPresentation,
   remarkBreaks,
   remarkPreserveCodeMeta,
   remarkNormalizeLinksAndTagInlineCode,
@@ -410,10 +417,11 @@ const CHAT_MARKDOWN_REHYPE_PLUGINS = [
   rehypePreserveImageSourceMeta,
   [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
   // KaTeX renders after sanitizing: its own markup is generated, not authored.
+  rehypeWrapMathCopySource,
   rehypeKatex,
 ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
 
-const KATEX_ONLY_REHYPE_PLUGINS = [rehypeKatex] satisfies NonNullable<
+const KATEX_ONLY_REHYPE_PLUGINS = [rehypeWrapMathCopySource, rehypeKatex] satisfies NonNullable<
   ReactMarkdownOptions["rehypePlugins"]
 >;
 
@@ -502,41 +510,6 @@ type MarkdownAstNode = {
   };
   children?: MarkdownAstNode[];
 };
-
-/**
- * Two rules the math parser lacks. Display delimiters mean display everywhere:
- * `$$…$$` and `\[…\]` render as block math even mid-paragraph, where the parser
- * reads them inline. And Pandoc's currency guard: `remark-math` reads `$…$`
- * with code-span rules, which turns prices such as "$5 and $3" into math, so
- * demote every single-dollar span whose content starts or ends with whitespace
- * or whose closing dollar is followed by a digit. Write `\$` to force a literal.
- */
-function remarkMathDelimiters() {
-  return (tree: MarkdownAstNode, file: { value?: unknown }) => {
-    const source = typeof file.value === "string" ? file.value : "";
-    const visit = (node: MarkdownAstNode) => {
-      node.children?.forEach((child, index, children) => {
-        visit(child);
-        const from = child.position?.start.offset;
-        const to = child.position?.end.offset;
-        if (child.type !== "inlineMath" || from === undefined || to === undefined) return;
-        const raw = source.slice(from, to);
-        if (raw.startsWith("$$") || raw.startsWith("\\[")) {
-          child.data = {
-            ...child.data,
-            hProperties: { className: ["language-math", "math-display"] },
-          };
-          return;
-        }
-        if (!raw.startsWith("$")) return;
-        const content = raw.slice(1, -1);
-        if (/^\S/.test(content) && /\S$/.test(content) && !/\d/.test(source[to] ?? "")) return;
-        children[index] = { type: "text", value: raw };
-      });
-    };
-    visit(tree);
-  };
-}
 
 function remarkPreserveCodeMeta() {
   return (tree: MarkdownAstNode) => {
@@ -2518,6 +2491,7 @@ function ChatMarkdown({
     ],
     [extraRemarkPlugins, lineBreaks],
   );
+  const renderedText = useMemo(() => protectCurrencyDollars(text), [text]);
 
   // react-markdown converts unparsed HTML nodes to text when skipHtml is false.
   // Keep that behavior explicit because literal mode depends on escaping the
@@ -2537,7 +2511,7 @@ function ChatMarkdown({
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >
-        {text}
+        {renderedText}
       </ReactMarkdown>
     </div>
   );
