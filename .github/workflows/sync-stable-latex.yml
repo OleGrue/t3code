@@ -1,0 +1,100 @@
+name: Sync stable upstream and build LaTeX macOS app
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: Rebuild even when the latest stable tag is already merged
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: sync-stable-latex
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-build:
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: OleGrue/t3code
+    steps:
+      - name: Checkout LaTeX branch
+        uses: actions/checkout@v6
+        with:
+          ref: latex
+          fetch-depth: 0
+
+      - id: upstream
+        name: Merge the latest stable upstream release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/pingdotgg/t3code.git 2>/dev/null || true
+          git fetch upstream --tags --prune
+
+          tag=$(gh api repos/pingdotgg/t3code/releases/latest --jq .tag_name)
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Latest upstream release is not a stable tag: $tag" >&2
+            exit 1
+          fi
+          version=${tag#v}
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$tag" HEAD && [[ "$FORCE_REBUILD" != "true" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "$tag is already included."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git merge --no-edit "$tag"; then
+            git merge --abort || true
+            echo "The LaTeX patch conflicts with $tag; resolve it manually before rebuilding." >&2
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Vite+
+        if: steps.upstream.outputs.changed == 'true'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Test LaTeX rendering
+        if: steps.upstream.outputs.changed == 'true'
+        run: vp run --filter @t3tools/web test
+
+      - name: Typecheck web client
+        if: steps.upstream.outputs.changed == 'true'
+        run: vp run --filter @t3tools/web typecheck
+
+      - name: Build unsigned Apple Silicon DMG
+        if: steps.upstream.outputs.changed == 'true'
+        run: vp run dist:desktop:dmg:arm64 --build-version "${{ steps.upstream.outputs.version }}"
+
+      - name: Upload DMG
+        if: steps.upstream.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: t3-code-latex-${{ steps.upstream.outputs.version }}-macos-arm64
+          path: release/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Push verified upstream merge
+        if: steps.upstream.outputs.changed == 'true'
+        run: git push origin HEAD:latex
